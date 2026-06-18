@@ -266,7 +266,22 @@ class HolographicSoulUnit(BaseEstimator, ClassifierMixin):
             probs = self._predict_proba_gpu_internal(X_g, x_sq_norm)
             return cp.asnumpy(probs)
         else:
-            return np.zeros((len(X), len(self.classes_)))
+            warnings.warn("[HolographicSoulUnit] GPU unavailable. Using CPU KNN fallback.", RuntimeWarning, stacklevel=2)
+            from sklearn.metrics.pairwise import euclidean_distances
+            dists = euclidean_distances(X_curr, self.X_train_)
+            k = min(self.k, len(self.X_train_))
+            idx = np.argsort(dists, axis=1)[:, :k]
+            row_idx = np.arange(len(X_curr))[:, None]
+            top_dists = dists[row_idx, idx]
+            top_y = np.asarray(self.y_train_)[idx]
+            gamma = self.dna_["gamma"]
+            weights = np.exp(-gamma * (top_dists ** 2)) + 1e-9
+            probs = np.zeros((len(X_curr), len(self.classes_)))
+            for c_idx, cls in enumerate(self.classes_):
+                probs[:, c_idx] = np.sum(weights * (top_y == cls), axis=1)
+            total = np.sum(probs, axis=1, keepdims=True)
+            total[total == 0] = 1.0
+            return probs / total
 
     def _predict_proba_gpu_internal(self, X_te_g, X_te_sq_norm=None):
         n_test = len(X_te_g)
@@ -557,7 +572,11 @@ class EntropyMaxwellUnit(BaseEstimator, ClassifierMixin):
 
     def fit(self, X, y):
         self.classes_ = np.unique(y)
-        if not GPU_AVAILABLE: return self
+        self.X_train_cpu_ = np.array(X)
+        self.y_train_cpu_ = np.array(y)
+        if not GPU_AVAILABLE:
+            warnings.warn("[EntropyMaxwellUnit] GPU unavailable. CPU fallback will be used at predict time.", RuntimeWarning, stacklevel=2)
+            return self
 
         X_g = cp.asarray(X, dtype=cp.float32)
         y_g = cp.asarray(y)
@@ -597,7 +616,20 @@ class EntropyMaxwellUnit(BaseEstimator, ClassifierMixin):
         return accuracy_score(y, preds)
 
     def predict_proba(self, X):
-        if not GPU_AVAILABLE: return np.zeros((len(X), len(self.classes_)))
+        if not GPU_AVAILABLE:
+            warnings.warn("[EntropyMaxwellUnit] GPU unavailable. Using CPU Gaussian fallback.", RuntimeWarning, stacklevel=2)
+            X_arr = np.asarray(X)
+            probs = np.zeros((len(X_arr), len(self.classes_)))
+            for i, cls in enumerate(self.classes_):
+                X_c = self.X_train_cpu_[self.y_train_cpu_ == cls]
+                if len(X_c) == 0: continue
+                mu = np.mean(X_c, axis=0)
+                sigma = np.var(X_c, axis=0) + 1e-5
+                log_p = -0.5 * np.sum(np.log(2 * np.pi * sigma)) - 0.5 * np.sum((X_arr - mu) ** 2 / sigma, axis=1)
+                log_p = np.clip(log_p, -100, 100)
+                probs[:, i] = np.exp(log_p)
+            total = np.sum(probs, axis=1, keepdims=True) + 1e-10
+            return probs / total
 
         X_g = cp.asarray(X, dtype=cp.float32)
         total_probs = cp.zeros((len(X), len(self.classes_)), dtype=cp.float32)
@@ -641,7 +673,10 @@ class QuantumFluxUnit(BaseEstimator, ClassifierMixin):
 
     def fit(self, X, y):
         self.classes_ = np.unique(y)
-        if not GPU_AVAILABLE: return self
+        # No CPU copy needed for uniform fallback
+        if not GPU_AVAILABLE:
+            warnings.warn("[QuantumFluxUnit] GPU unavailable. CPU fallback will be used at predict time.", RuntimeWarning, stacklevel=2)
+            return self
 
         X_g = cp.asarray(X, dtype=cp.float32)
 
@@ -688,7 +723,9 @@ class QuantumFluxUnit(BaseEstimator, ClassifierMixin):
         return accuracy_score(y, preds)
 
     def predict_proba(self, X):
-        if not GPU_AVAILABLE: return np.zeros((len(X), len(self.classes_)))
+        if not GPU_AVAILABLE:
+            warnings.warn("[QuantumFluxUnit] GPU unavailable. Returning uniform distribution as CPU fallback.", RuntimeWarning, stacklevel=2)
+            return np.ones((len(X), len(self.classes_))) / len(self.classes_)
         X_g = cp.asarray(X, dtype=cp.float32)
         total_probs = cp.zeros((len(X), len(self.classes_)), dtype=cp.float32)
 
@@ -723,7 +760,11 @@ class EventHorizonUnit(BaseEstimator, ClassifierMixin):
 
     def fit(self, X, y):
         self.classes_ = np.unique(y)
-        if not GPU_AVAILABLE: return self
+        self.X_train_cpu_ = np.array(X)
+        self.y_train_cpu_ = np.array(y)
+        if not GPU_AVAILABLE:
+            warnings.warn("[EventHorizonUnit] GPU unavailable. CPU fallback will be used at predict time.", RuntimeWarning, stacklevel=2)
+            return self
 
         X_g = cp.asarray(X, dtype=cp.float32)
         y_g = cp.asarray(y)
@@ -751,7 +792,18 @@ class EventHorizonUnit(BaseEstimator, ClassifierMixin):
         return accuracy_score(y, preds)
 
     def predict_proba(self, X):
-        if not GPU_AVAILABLE: return np.zeros((len(X), len(self.classes_)))
+        if not GPU_AVAILABLE:
+            warnings.warn("[EventHorizonUnit] GPU unavailable. Using CPU centroid gravity fallback.", RuntimeWarning, stacklevel=2)
+            X_arr = np.asarray(X)
+            probs = np.zeros((len(X_arr), len(self.classes_)))
+            for i, cls in enumerate(self.classes_):
+                X_c = self.X_train_cpu_[self.y_train_cpu_ == cls]
+                center = np.mean(X_c, axis=0)
+                mass = np.log1p(len(X_c))
+                d2 = np.sum((X_arr - center) ** 2, axis=1)
+                probs[:, i] = mass / (d2 + 1e-9)
+            total = np.sum(probs, axis=1, keepdims=True)
+            return np.nan_to_num(probs / (total + 1e-9), nan=1.0/len(self.classes_))
 
         X_g = cp.asarray(X, dtype=cp.float32)
 
